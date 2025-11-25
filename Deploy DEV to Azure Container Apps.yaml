@@ -1,0 +1,125 @@
+on:
+push:
+branches:
+- DEV
+
+jobs:
+build-and-deploy:
+runs-on: ubuntu-latest
+steps:
+- name: Checkout code
+uses: actions/checkout@v3
+
+- name: Login to Azure
+uses: azure/login@v1
+with:
+creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+- name: Build and push Docker image
+run: |
+az acr build --registry <tu-registro> --image test-app-dev:${{ github.sha }} .
+
+- name: Deploy to Azure Container Apps
+run: |
+az containerapp update \
+--name test-app-dev \
+--resource-group <tu-grupo-recursos> \
+--image <tu-registro>.azurecr.io/test-app-dev:${{ github.sha }}
+________________________________________
+📄 azure-pipelines.yml
+YAML
+trigger:
+branches:
+include:
+- DEV
+- main
+
+variables:
+# Variables globales
+azureSubscription: 'Nombre-Conexión-Service'
+resourceGroup: 'tu-grupo-recursos'
+containerAppEnv: 'nombre-entorno'
+acrName: 'tuRegistroACR'
+imageName: 'test-app'
+devAppName: 'test-app-dev'
+prodAppName: 'test-app'
+devPort: 3002
+prodPort: 3000
+
+stages:
+- stage: Build
+displayName: "Build & Push Docker Image"
+jobs:
+- job: BuildAndPush
+pool:
+vmImage: 'ubuntu-latest'
+steps:
+- task: Checkout@v2
+
+- task: AzureCLI@2
+displayName: "Login to Azure"
+inputs:
+azureSubscription: $(azureSubscription)
+scriptType: bash
+scriptLocation: inlineScript
+inlineScript: |
+echo "Autenticando en Azure..."
+
+- task: AzureCLI@2
+displayName: "Build & Push Image to ACR"
+inputs:
+azureSubscription: $(azureSubscription)
+scriptType: bash
+scriptLocation: inlineScript
+inlineScript: |
+IMAGE_TAG=$(Build.BuildId)
+echo "Construyendo imagen: $(imageName):$IMAGE_TAG"
+az acr build --registry $(acrName) --image $(imageName):$IMAGE_TAG .
+
+- stage: Deploy_DEV
+displayName: "Deploy to DEV"
+condition: eq(variables['Build.SourceBranchName'], 'DEV')
+dependsOn: Build
+jobs:
+- job: DeployDev
+pool:
+vmImage: 'ubuntu-latest'
+steps:
+- task: AzureCLI@2
+displayName: "Deploy to Azure Container App DEV"
+inputs:
+azureSubscription: $(azureSubscription)
+scriptType: bash
+scriptLocation: inlineScript
+inlineScript: |
+IMAGE_TAG=$(Build.BuildId)
+echo "Desplegando en DEV..."
+az containerapp update \
+--name $(devAppName) \
+--resource-group $(resourceGroup) \
+--image $(acrName).azurecr.io/$(imageName):$IMAGE_TAG \
+--env-vars NODE_ENV=dev NODE_PORT=$(devPort)
+
+- stage: Deploy_PROD
+displayName: "Deploy to PROD"
+condition: eq(variables['Build.SourceBranchName'], 'main')
+dependsOn: Build
+jobs:
+- job: DeployProd
+pool:
+vmImage: 'ubuntu-latest'
+steps:
+- task: AzureCLI@2
+displayName: "Deploy to Azure Container App PROD"
+inputs:
+azureSubscription: $(azureSubscription)
+scriptType: bash
+scriptLocation: inlineScript
+inlineScript: |
+IMAGE_TAG=$(Build.BuildId)
+echo "Desplegando en PROD..."
+az containerapp update \
+--name $(prodAppName) \
+--resource-group $(resourceGroup) \
+--image $(acrName).azurecr.io/$(imageName):$IMAGE_TAG \
+--env-vars NODE_ENV=production NODE_PORT=$(prodPort)
